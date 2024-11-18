@@ -16,6 +16,9 @@ public class Usuario {
 
     @Column(nullable = false, unique = true)
     private String email;
+    
+    @Column(nullable = false)
+    private String password;
 
     // Getters e Setters
     public Long getId() {
@@ -41,4 +44,14 @@ public class Usuario {
     public void setEmail(String email) {
         this.email = email;
     }
+
+	public CharSequence getSenha() {
+		// TODO Auto-generated method stub
+		return password;
+	}
+
+	public void setSenha(String encode) {
+		// TODO Auto-generated method stub
+		this.password = encode;
+	}
 }
