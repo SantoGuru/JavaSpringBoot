@@ -1,0 +1,443 @@
+Entendi! Olhando para a estrutura do seu projeto, parece que ele está bem organizado até o momento. Vou descrever como seguir adiante para implementar a segurança da senha e o sistema de autenticação via token JWT, considerando essa estrutura atual do projeto.
+
+Vou sugerir os próximos passos para adicionar hashing de senha e autenticação JWT:
+
+1. Adicionar a Dependência do Spring Security e JWT ao pom.xml
+Vamos garantir que você tem todas as dependências corretas no seu pom.xml. Adicione as dependências do Spring Security e do JWT:
+
+xml
+Copiar código
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+<dependency>
+    <groupId>io.jsonwebtoken</groupId>
+    <artifactId>jjwt</artifactId>
+    <version>0.9.1</version>
+</dependency>
+2. Criar a Classe de Configuração de Segurança
+Crie um pacote config para organizar as configurações e, dentro dele, uma classe SecurityConfig.java para definir a configuração do Spring Security.
+
+Pacote sugerido: com.seuprojeto.api.config
+Classe: SecurityConfig.java
+java
+Copiar código
+// Caminho: src/main/java/com/seuprojeto/api/config/SecurityConfig.java
+
+package com.seuprojeto.api.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    protected void configure(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+            .authorizeRequests()
+            .antMatchers("/api/auth/**").permitAll()
+            .anyRequest().authenticated();
+    }
+}
+3. Criar a Classe Utilitária para Gerenciar JWT
+Precisamos de uma classe que trate da geração, validação e parsing dos tokens JWT. Crie a classe JwtUtil.java:
+
+Pacote sugerido: com.seuprojeto.api.util
+Classe: JwtUtil.java
+java
+Copiar código
+// Caminho: src/main/java/com/seuprojeto/api/util/JwtUtil.java
+
+package com.seuprojeto.api.util;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import org.springframework.stereotype.Component;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
+
+@Component
+public class JwtUtil {
+
+    private String SECRET_KEY = "minha_chave_secreta";
+
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser().setSigningKey(SECRET_KEY).parseClaimsJws(token).getBody();
+    }
+
+    private Boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+
+    public String generateToken(String username) {
+        Map<String, Object> claims = new HashMap<>();
+        return createToken(claims, username);
+    }
+
+    private String createToken(Map<String, Object> claims, String subject) {
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(subject)
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 10)) // 10 horas
+                .signWith(SignatureAlgorithm.HS256, SECRET_KEY)
+                .compact();
+    }
+
+    public Boolean validateToken(String token, String username) {
+        final String extractedUsername = extractUsername(token);
+        return (extractedUsername.equals(username) && !isTokenExpired(token));
+    }
+}
+4. Modificar o UsuarioController para Criar Senhas Hash
+Agora, modifique o UsuarioController para usar o PasswordEncoder ao salvar a senha do usuário.
+
+Caminho atual do seu controller: com.seuprojeto.api.controller.UsuarioController.java
+java
+Copiar código
+package com.seuprojeto.api.controller;
+
+import com.seuprojeto.api.model.Usuario;
+import com.seuprojeto.api.repository.UsuarioRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/usuarios")
+public class UsuarioController {
+
+    @Autowired
+    private UsuarioRepository usuarioRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @GetMapping
+    public List<Usuario> listarTodos() {
+        return usuarioRepository.findAll();
+    }
+
+    @PostMapping
+    public Usuario criarUsuario(@RequestBody Usuario usuario) {
+        usuario.setSenha(passwordEncoder.encode(usuario.getSenha()));
+        return usuarioRepository.save(usuario);
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<Usuario> atualizarUsuario(@PathVariable Long id, @RequestBody Usuario usuarioAtualizado) {
+        return usuarioRepository.findById(id)
+                .map(usuario -> {
+                    usuario.setNome(usuarioAtualizado.getNome());
+                    usuario.setEmail(usuarioAtualizado.getEmail());
+                    usuario.setSenha(passwordEncoder.encode(usuarioAtualizado.getSenha()));
+                    Usuario usuarioSalvo = usuarioRepository.save(usuario);
+                    return ResponseEntity.ok(usuarioSalvo);
+                }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletarUsuario(@PathVariable Long id) {
+        return usuarioRepository.findById(id)
+                .map(usuario -> {
+                    usuarioRepository.delete(usuario);
+                    return ResponseEntity.noContent().build();
+                }).orElse(ResponseEntity.notFound().build());
+    }
+}
+5. Criar um Endpoint para Login e Geração do Token JWT
+Vamos adicionar um novo controller para autenticação, onde o usuário poderá fazer o login e obter o token JWT.
+
+Pacote sugerido: com.seuprojeto.api.controller
+Classe: AuthController.java
+java
+Copiar código
+package com.seuprojeto.api.controller;
+
+import com.seuprojeto.api.model.Usuario;
+import com.seuprojeto.api.repository.UsuarioRepository;
+import com.seuprojeto.api.util.JwtUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Optional;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private UsuarioRepository usuarioRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody Usuario usuario) {
+        Optional<Usuario> user = usuarioRepository.findByEmail(usuario.getEmail());
+        if (user.isPresent() && passwordEncoder.matches(usuario.getSenha(), user.get().getSenha())) {
+            String token = jwtUtil.generateToken(user.get().getEmail());
+            return ResponseEntity.ok(token);
+        } else {
+            return ResponseEntity.status(401).body("Credenciais inválidas");
+        }
+    }
+}
+6. Adicionar um Filtro para Validar Token em Requisições
+Precisamos garantir que todas as requisições (exceto autenticação) sejam validadas usando o token JWT. Para isso, criaremos um filtro que intercepta as requisições.
+
+Pacote sugerido: com.seuprojeto.api.config
+Classe: JwtRequestFilter.java
+java
+Copiar código
+package com.seuprojeto.api.config;
+
+import com.seuprojeto.api.util.JwtUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+
+@Component
+public class JwtRequestFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+
+        final String authorizationHeader = request.getHeader("Authorization");
+
+        String username = null;
+        String jwt = null;
+
+        if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
+            jwt = authorizationHeader.substring(7);
+            username = jwtUtil.extractUsername(jwt);
+        }
+
+        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            if (jwtUtil.validateToken(jwt, username)) {
+                // Você pode configurar a autenticação aqui se desejar
+            }
+        }
+
+        chain.doFilter(request, response);
+    }
+}
+Conclusão
+Hashing de senha: Foi implementado usando BCryptPasswordEncoder.
+JWT para autenticação: Criamos uma utilidade JWT para gerar e validar tokens e um controller de autenticação para login.
+Segurança e Filtros: Usamos um filtro para interceptar requisições e validar o token JWT.
+Essas etapas te ajudarão a garantir que as senhas sejam armazenadas de forma segura e que a API seja acessível apenas a usuários autenticados. Se precisar de mais alguma coisa, estou à disposição para ajudar!
+
+
+
+
+
+
+Você disse:
+// Caminho: src/main/java/com/seuprojeto/api/config/SecurityConfig.java
+
+package com.seuprojeto.api.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    protected void configure(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+            .authorizeRequests()
+            .antMatchers("/api/auth/**").permitAll()
+            .anyRequest().authenticated();
+    }
+}
+
+
+Ele tá apresentando erro no Antmatchers e em outros metodos falando que tá deprectad
+O ChatGPT disse:
+ChatGPT
+Entendi o problema! A partir das versões mais recentes do Spring Security (Spring Boot 3 e Spring Security 6), a API de configuração sofreu algumas mudanças significativas. O método antMatchers() e outros métodos relacionados à configuração de autorização foram descontinuados e a forma como se configura o HttpSecurity também mudou.
+
+Vou fornecer uma versão atualizada da classe SecurityConfig compatível com o Spring Security 6. Vou utilizar uma abordagem diferente para a configuração de segurança que é necessária nas versões mais recentes.
+
+Atualizando a Configuração de Segurança
+Nas versões mais recentes do Spring Security, utilizamos a API de configuração por lambda para definir as permissões de acesso. Vou reescrever a classe SecurityConfig para você:
+
+java
+Copiar código
+// Caminho: src/main/java/com/seuprojeto/api/config/SecurityConfig.java
+
+package com.seuprojeto.api.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.csrf(csrf -> csrf.disable())
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/**").permitAll() // Permite acesso público aos endpoints de autenticação
+                .anyRequest().authenticated() // Todos os outros endpoints requerem autenticação
+            );
+        return http.build();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration authenticationConfiguration) throws Exception {
+        return authenticationConfiguration.getAuthenticationManager();
+    }
+}
+Explicação das Mudanças
+Configuração com SecurityFilterChain:
+
+O método configure(HttpSecurity http) foi substituído por um @Bean SecurityFilterChain.
+O método antMatchers() foi substituído por requestMatchers() que é utilizado para definir quais URLs são acessíveis sem autenticação.
+HttpSecurity com Lambda:
+
+Em vez de usar métodos encadeados como authorizeRequests(), agora utilizamos a API de lambda. Assim, utilizamos o authorizeHttpRequests(auth -> auth... para configurar permissões específicas.
+A desativação do CSRF agora é feita com csrf(csrf -> csrf.disable()).
+AuthenticationManager Bean:
+
+Em algumas situações, você precisará de um AuthenticationManager (por exemplo, para login). Agora, ele é obtido por meio da configuração AuthenticationConfiguration e, por isso, precisamos declarar um @Bean que expõe o AuthenticationManager.
+Resumindo a Classe SecurityConfig
+PasswordEncoder: Configuramos o BCryptPasswordEncoder para codificar senhas antes de armazená-las.
+SecurityFilterChain: Configuramos o comportamento do Spring Security, permitindo o acesso público ao /api/auth/** e exigindo autenticação para qualquer outra rota.
+CSRF: O CSRF foi desabilitado. Dependendo do seu contexto, pode ser necessário habilitar para aumentar a segurança de sua aplicação, especialmente em requisições que alteram dados (POST, PUT, DELETE).
+AuthenticationManager: Declarado como @Bean para ser utilizado em processos de autenticação.
+Agora sua classe SecurityConfig está compatível com as versões mais recentes do Spring Boot e Spring Security. Isso deve resolver os problemas relacionados aos métodos deprectados (antMatchers() e outras mudanças).
+
+
+
+
+
+
+Você disse:
+Description	Resource	Path	Location	Type
+Project 'JavaSpringBoot' has no explicit encoding set	JavaSpringBoot		/JavaSpringBoot	No explicit project encoding
+
+
+Dando esse erro quando importei o projeto dnv pelo git
+
+2/2
+
+O ChatGPT disse:
+ChatGPT
+Esse aviso indica que o Eclipse detectou que o projeto não possui uma codificação de caracteres explícita definida. Embora não seja necessariamente um erro crítico, não ter uma codificação explícita pode levar a problemas, especialmente ao trabalhar com textos que não estão no alfabeto padrão (acentos, caracteres especiais, etc.).
+
+Para resolver isso, você precisa definir a codificação do projeto no Eclipse, geralmente optando pela UTF-8, que é a codificação padrão usada para projetos Java modernos, por sua ampla compatibilidade com caracteres especiais.
+
+Vou guiá-lo através dos passos para configurar a codificação de caracteres no Eclipse:
+
+1. Configurar a Codificação do Projeto para UTF-8
+Clique com o Botão Direito no Projeto:
+
+No Explorador de Projetos, clique com o botão direito no nome do projeto (no seu caso, JavaSpringBoot).
+Selecione Properties:
+
+No menu de contexto, selecione Properties (ou Propriedades se estiver em português).
+Navegue até Resource:
+
+No painel esquerdo da janela de propriedades, clique em Resource.
+Configurar a Codificação:
+
+Na seção Text file encoding, selecione Other e depois escolha UTF-8 na lista.
+Clique em Apply and Close:
+
+Clique em Apply and Close para salvar as alterações.
+2. Configurar a Codificação de Todo o Workspace
+Se quiser definir UTF-8 como padrão para todos os seus projetos, você pode fazer isso para o workspace inteiro, assim você não precisará definir manualmente para cada novo projeto.
+
+Clique em Window -> Preferences:
+
+Vá até o menu Window (ou Janela) e depois em Preferences (ou Preferências).
+Navegue até General -> Workspace:
+
+Na janela de preferências, expanda General e clique em Workspace.
+Configurar a Codificação:
+
+Em Text file encoding, escolha UTF-8.
+Clique em Apply and Close:
+
+Clique em Apply and Close para salvar a configuração.
+3. Atualizar o Projeto
+Depois de definir a codificação, você pode precisar atualizar o projeto para que as mudanças tenham efeito.
+
+Clique com o botão direito no projeto e escolha Refresh (ou pressione F5 no teclado).
+Por Que Definir UTF-8 é Importante?
+Internacionalização: Ao usar UTF-8, seu projeto suporta uma ampla gama de caracteres, incluindo caracteres especiais e acentos. Isso é essencial para garantir a internacionalização e facilitar o uso do sistema por usuários que falam diferentes idiomas.
+Compatibilidade: Muitas bibliotecas e frameworks modernos, incluindo o Spring Boot, esperam que os arquivos de origem sejam codificados em UTF-8 para evitar problemas de compatibilidade e erros de interpretação de caracteres.
+Após definir a codificação, o aviso de "No explicit project encoding" deve desaparecer, e você estará em uma posição melhor para garantir que os textos do seu projeto sejam interpretados corretamente.
+
+Se precisar de mais alguma coisa, estou por aqui para ajudar!
